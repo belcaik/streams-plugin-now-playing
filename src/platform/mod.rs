@@ -4,10 +4,12 @@ use crate::{core::Source, model::Config};
 
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "windows")]
+mod windows;
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
 struct StoppedSource;
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
 impl Source for StoppedSource {
     fn snapshot(&mut self) -> Option<crate::model::Track> {
         None
@@ -19,7 +21,11 @@ pub fn create(config: &Config) -> io::Result<Box<dyn Source>> {
     return linux::LinuxSource::new(config)
         .map(|source| Box::new(source) as Box<dyn Source>)
         .map_err(|error| io::Error::other(error.to_string()));
+    #[cfg(target_os = "windows")]
+    return windows::WindowsSource::new(config)
+        .map(|source| Box::new(source) as Box<dyn Source>)
+        .map_err(|error| io::Error::other(error.to_string()));
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     Ok(Box::new(StoppedSource))
 }
