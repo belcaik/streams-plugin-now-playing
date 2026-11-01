@@ -21,6 +21,12 @@ pub struct Track {
 }
 
 impl Track {
+    pub fn clamp_position(&mut self) {
+        if self.duration_ms > 0 {
+            self.position_ms = self.position_ms.min(self.duration_ms);
+        }
+    }
+
     pub fn stopped() -> Self {
         Self {
             status: Status::Stopped,
