@@ -99,12 +99,29 @@ async fn read_candidate(
         .build()
         .await?;
     let metadata = player.metadata().await?;
-    let status = match player.playback_status().await?.as_str() {
+    let status = player.playback_status().await?;
+    let position = player.position().await?;
+    Ok(candidate_from_values(
+        name,
+        status,
+        position,
+        metadata,
+        stable_order,
+    ))
+}
+
+fn candidate_from_values(
+    name: String,
+    playback: String,
+    position: i64,
+    metadata: HashMap<String, OwnedVariant>,
+    stable_order: usize,
+) -> Candidate {
+    let status = match playback.as_str() {
         "Playing" => Status::Playing,
         "Paused" => Status::Paused,
         _ => Status::Stopped,
     };
-    let position = player.position().await?;
     let track = Track {
         status,
         title: metadata_string(&metadata, "xesam:title").unwrap_or_default(),
@@ -119,11 +136,11 @@ async fn read_candidate(
         position_ms: micros_to_ms(position),
         source: source_id(&name),
     };
-    Ok(Candidate {
+    Candidate {
         track,
         stable_id: name,
         stable_order,
-    })
+    }
 }
 
 fn metadata_string(metadata: &HashMap<String, OwnedVariant>, key: &str) -> Option<String> {
@@ -204,5 +221,111 @@ pub(crate) fn image_mime(bytes: &[u8]) -> Option<&'static str> {
         Some("image/webp")
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn string(value: &str) -> OwnedVariant {
+        OwnedVariant::from(zbus::Str::from(value))
+    }
+    fn strings(values: Vec<&str>) -> OwnedVariant {
+        OwnedVariant::try_from(zbus::Array::from(values)).unwrap()
+    }
+
+    fn metadata() -> HashMap<String, OwnedVariant> {
+        HashMap::from([
+            ("xesam:title".into(), string("Canción 🎵")),
+            ("xesam:artist".into(), strings(vec!["Uno", "Dos"])),
+            ("xesam:album".into(), string("Álbum")),
+            ("mpris:length".into(), OwnedVariant::from(180_000_000_i64)),
+            ("mpris:artUrl".into(), string("https://example/art.jpg")),
+        ])
+    }
+
+    #[test]
+    fn parses_complete_metadata_and_multiple_artists() {
+        let candidate = candidate_from_values(
+            "org.mpris.MediaPlayer2.spotify".into(),
+            "Playing".into(),
+            42_000_000,
+            metadata(),
+            0,
+        );
+        assert_eq!(candidate.track.title, "Canción 🎵");
+        assert_eq!(candidate.track.artist, "Uno, Dos");
+        assert_eq!(candidate.track.album, "Álbum");
+        assert_eq!(candidate.track.duration_ms, 180_000);
+        assert_eq!(candidate.track.position_ms, 42_000);
+    }
+
+    #[test]
+    fn tolerates_missing_wrong_and_negative_values() {
+        let metadata = HashMap::from([
+            ("xesam:title".into(), OwnedVariant::from(42_i64)),
+            ("xesam:artist".into(), string("not an array")),
+            ("mpris:length".into(), OwnedVariant::from(-1_i64)),
+        ]);
+        let candidate = candidate_from_values(
+            "org.mpris.MediaPlayer2.vlc".into(),
+            "unknown".into(),
+            -2,
+            metadata,
+            0,
+        );
+        assert_eq!(candidate.track.title, "");
+        assert_eq!(candidate.track.artist, "");
+        assert_eq!(candidate.track.duration_ms, 0);
+        assert_eq!(candidate.track.position_ms, 0);
+        assert_eq!(candidate.track.status, Status::Stopped);
+    }
+
+    #[test]
+    fn derives_stable_short_source_ids() {
+        assert_eq!(source_id("org.mpris.MediaPlayer2.spotify"), "spotify");
+        assert_eq!(
+            source_id("org.mpris.MediaPlayer2.Firefox.instance_1"),
+            "firefox"
+        );
+        assert_eq!(source_id("org.mpris.MediaPlayer2.vlc"), "vlc");
+    }
+
+    #[test]
+    fn filters_remote_art_and_decodes_local_paths() {
+        assert_eq!(
+            sanitize_art_url("https://example/a"),
+            Some("https://example/a".into())
+        );
+        assert_eq!(
+            sanitize_art_url("data:image/png;base64,AA=="),
+            Some("data:image/png;base64,AA==".into())
+        );
+        assert_eq!(sanitize_art_url("http://example/a"), None);
+        assert_eq!(
+            decode_file_path("file:///tmp/a%20b.png"),
+            Some(std::path::PathBuf::from("/tmp/a b.png"))
+        );
+    }
+
+    #[test]
+    fn detects_image_magic_and_rejects_oversized_file() {
+        assert_eq!(
+            image_mime(&[0x89, b'P', b'N', b'G', 13, 10, 26, 10]),
+            Some("image/png")
+        );
+        assert_eq!(image_mime(&[0xff, 0xd8, 0xff]), Some("image/jpeg"));
+        assert_eq!(image_mime(b"GIF89a"), Some("image/gif"));
+        assert_eq!(image_mime(b"RIFFxxxxWEBP"), Some("image/webp"));
+        let path = std::env::temp_dir().join(format!("now-playing-{}-art.png", std::process::id()));
+        let mut bytes = vec![0x89, b'P', b'N', b'G', 13, 10, 26, 10];
+        bytes.resize(1024 * 1024 + 1, 0);
+        std::fs::write(&path, bytes).unwrap();
+        assert_eq!(
+            sanitize_art_url(&format!("file://{}", path.display())),
+            None
+        );
+        std::fs::remove_file(path).unwrap();
     }
 }
