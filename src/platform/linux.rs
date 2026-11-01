@@ -1,5 +1,6 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, fs::File, io::Read};
 
+use base64::Engine;
 use zbus::{Connection, zvariant::OwnedVariant};
 
 use crate::{
@@ -109,8 +110,7 @@ async fn read_candidate(
         title: metadata_string(&metadata, "xesam:title").unwrap_or_default(),
         artist: metadata_artists(&metadata).unwrap_or_default(),
         album: metadata_string(&metadata, "xesam:album").unwrap_or_default(),
-        art_url: metadata_string(&metadata, "mpris:artUrl")
-            .filter(|url| url.starts_with("https://") || url.starts_with("data:")),
+        art_url: metadata_string(&metadata, "mpris:artUrl").and_then(|url| sanitize_art_url(&url)),
         duration_ms: metadata
             .get("mpris:length")
             .and_then(value_i64)
@@ -153,4 +153,56 @@ fn source_id(name: &str) -> String {
         .filter(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
         .flat_map(char::to_lowercase)
         .collect()
+}
+
+fn sanitize_art_url(url: &str) -> Option<String> {
+    if url.starts_with("https://") || url.starts_with("data:") {
+        return Some(url.to_owned());
+    }
+    let path = decode_file_path(url)?;
+    let file = File::open(path).ok()?;
+    let mut bytes = Vec::new();
+    file.take(1024 * 1024 + 1).read_to_end(&mut bytes).ok()?;
+    if bytes.len() > 1024 * 1024 {
+        return None;
+    }
+    let mime = image_mime(&bytes)?;
+    Some(format!(
+        "data:{mime};base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    ))
+}
+
+fn decode_file_path(url: &str) -> Option<std::path::PathBuf> {
+    let encoded = url.strip_prefix("file://")?.as_bytes();
+    let mut decoded = Vec::with_capacity(encoded.len());
+    let mut index = 0;
+    while index < encoded.len() {
+        if encoded[index] == b'%' {
+            let hex = encoded.get(index + 1..index + 3)?;
+            let text = std::str::from_utf8(hex).ok()?;
+            decoded.push(u8::from_str_radix(text, 16).ok()?);
+            index += 3;
+        } else {
+            decoded.push(encoded[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(decoded)
+        .ok()
+        .map(std::path::PathBuf::from)
+}
+
+pub(crate) fn image_mime(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]) {
+        Some("image/png")
+    } else if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        Some("image/jpeg")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else {
+        None
+    }
 }
