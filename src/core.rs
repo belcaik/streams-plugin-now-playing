@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use crate::model::{Config, Status, Track};
 
 pub trait Source {
@@ -53,8 +55,51 @@ fn priority(candidate: &Candidate, config: &Config) -> usize {
         .unwrap_or(usize::MAX)
 }
 
+#[derive(Default)]
+pub struct ChangeDetector {
+    last: Option<(Track, Instant)>,
+}
+
+impl ChangeDetector {
+    pub fn new() -> Self {
+        Self { last: None }
+    }
+
+    pub fn observe(&mut self, next: Track, now: Instant) -> bool {
+        let should_emit = self.last.as_ref().is_none_or(|(last, emitted_at)| {
+            !same_identity(last, &next) || position_drifted(last, *emitted_at, &next, now)
+        });
+        if should_emit {
+            self.last = Some((next, now));
+        }
+        should_emit
+    }
+}
+
+fn same_identity(left: &Track, right: &Track) -> bool {
+    left.status == right.status
+        && left.source == right.source
+        && left.title == right.title
+        && left.artist == right.artist
+        && left.album == right.album
+        && left.art_url == right.art_url
+        && left.duration_ms == right.duration_ms
+}
+
+fn position_drifted(last: &Track, emitted_at: Instant, next: &Track, now: Instant) -> bool {
+    let elapsed_ms = u64::try_from(now.duration_since(emitted_at).as_millis()).unwrap_or(u64::MAX);
+    let expected = if last.status == Status::Playing {
+        last.position_ms.saturating_add(elapsed_ms)
+    } else {
+        last.position_ms
+    };
+    expected.abs_diff(next.position_ms) > 2000
+}
+
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, Instant};
+
     use super::*;
 
     fn candidate(status: Status, source: &str, order: usize, id: &str) -> Candidate {
@@ -150,5 +195,101 @@ mod tests {
         item.track.position_ms = 20_000;
         let selected = select_candidate(vec![item], &config(&[], &[])).unwrap();
         assert_eq!(selected.position_ms, 10_000);
+    }
+
+    #[test]
+    fn detector_emits_first_snapshot_and_every_identity_change() {
+        let now = Instant::now();
+        let base = candidate(Status::Playing, "spotify", 0, "a").track;
+        let mut detector = ChangeDetector::new();
+        assert!(detector.observe(base.clone(), now));
+        let changes = [
+            Track {
+                title: "Other".into(),
+                ..base.clone()
+            },
+            Track {
+                artist: "Artist".into(),
+                ..base.clone()
+            },
+            Track {
+                album: "Album".into(),
+                ..base.clone()
+            },
+            Track {
+                art_url: Some("data:image/png;base64,AA==".into()),
+                ..base.clone()
+            },
+            Track {
+                duration_ms: 20_000,
+                ..base.clone()
+            },
+            Track {
+                source: "vlc".into(),
+                ..base.clone()
+            },
+            Track {
+                status: Status::Paused,
+                ..base.clone()
+            },
+        ];
+        for changed in changes {
+            assert!(detector.observe(changed, now));
+        }
+    }
+
+    #[test]
+    fn detector_ignores_expected_progress_and_exact_two_second_drift() {
+        let now = Instant::now();
+        let base = candidate(Status::Playing, "spotify", 0, "a").track;
+        let mut detector = ChangeDetector::new();
+        detector.observe(base.clone(), now);
+        assert!(!detector.observe(
+            Track {
+                position_ms: 1000,
+                ..base.clone()
+            },
+            now + Duration::from_secs(1),
+        ));
+        assert!(!detector.observe(
+            Track {
+                position_ms: 3000,
+                ..base
+            },
+            now + Duration::from_secs(1),
+        ));
+    }
+
+    #[test]
+    fn detector_emits_forward_and_backward_seeks() {
+        let now = Instant::now();
+        let base = candidate(Status::Playing, "spotify", 0, "a").track;
+        let mut detector = ChangeDetector::new();
+        detector.observe(base.clone(), now);
+        assert!(detector.observe(
+            Track {
+                position_ms: 4000,
+                ..base.clone()
+            },
+            now + Duration::from_secs(1),
+        ));
+        assert!(detector.observe(
+            Track {
+                position_ms: 0,
+                ..base
+            },
+            now + Duration::from_secs(2),
+        ));
+    }
+
+    #[test]
+    fn detector_keeps_paused_fixed_and_stopped_only_once() {
+        let now = Instant::now();
+        let mut detector = ChangeDetector::new();
+        let paused = candidate(Status::Paused, "spotify", 0, "a").track;
+        detector.observe(paused.clone(), now);
+        assert!(!detector.observe(paused, now + Duration::from_secs(10)));
+        assert!(detector.observe(Track::stopped(), now));
+        assert!(!detector.observe(Track::stopped(), now + Duration::from_secs(1)));
     }
 }
