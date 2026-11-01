@@ -1,3 +1,5 @@
+#[cfg(target_os = "linux")]
+mod artwork;
 pub mod core;
 pub mod model;
 mod platform;
