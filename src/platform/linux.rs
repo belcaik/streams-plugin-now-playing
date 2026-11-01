@@ -1,6 +1,5 @@
 use std::{collections::HashMap, fs::File, io::Read};
 
-use base64::Engine;
 use zbus::{Connection, zvariant::OwnedVariant};
 
 use crate::{
@@ -179,15 +178,13 @@ fn sanitize_art_url(url: &str) -> Option<String> {
     let path = decode_file_path(url)?;
     let file = File::open(path).ok()?;
     let mut bytes = Vec::new();
-    file.take(1024 * 1024 + 1).read_to_end(&mut bytes).ok()?;
-    if bytes.len() > 1024 * 1024 {
+    file.take((crate::artwork::MAX_ART_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() > crate::artwork::MAX_ART_BYTES {
         return None;
     }
-    let mime = image_mime(&bytes)?;
-    Some(format!(
-        "data:{mime};base64,{}",
-        base64::engine::general_purpose::STANDARD.encode(bytes)
-    ))
+    crate::artwork::data_uri(&bytes)
 }
 
 fn decode_file_path(url: &str) -> Option<std::path::PathBuf> {
@@ -208,20 +205,6 @@ fn decode_file_path(url: &str) -> Option<std::path::PathBuf> {
     String::from_utf8(decoded)
         .ok()
         .map(std::path::PathBuf::from)
-}
-
-pub(crate) fn image_mime(bytes: &[u8]) -> Option<&'static str> {
-    if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]) {
-        Some("image/png")
-    } else if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
-        Some("image/jpeg")
-    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
-        Some("image/gif")
-    } else if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
-        Some("image/webp")
-    } else {
-        None
-    }
 }
 
 #[cfg(test)]
@@ -310,14 +293,7 @@ mod tests {
     }
 
     #[test]
-    fn detects_image_magic_and_rejects_oversized_file() {
-        assert_eq!(
-            image_mime(&[0x89, b'P', b'N', b'G', 13, 10, 26, 10]),
-            Some("image/png")
-        );
-        assert_eq!(image_mime(&[0xff, 0xd8, 0xff]), Some("image/jpeg"));
-        assert_eq!(image_mime(b"GIF89a"), Some("image/gif"));
-        assert_eq!(image_mime(b"RIFFxxxxWEBP"), Some("image/webp"));
+    fn rejects_oversized_file() {
         let path = std::env::temp_dir().join(format!("now-playing-{}-art.png", std::process::id()));
         let mut bytes = vec![0x89, b'P', b'N', b'G', 13, 10, 26, 10];
         bytes.resize(1024 * 1024 + 1, 0);
