@@ -13,7 +13,7 @@ base64 = "0.22"
 zbus = { version = "6", default-features = false, features = ["default-rt", "proxy"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.62", default-features = false, features = ["std", "Foundation", "Foundation_Collections", "Media_Control"] }
+windows = { version = "0.62", default-features = false, features = ["std", "Foundation", "Foundation_Collections", "Media_Control", "Storage_Streams"] }
 
 [profile.release]
 opt-level = "z"

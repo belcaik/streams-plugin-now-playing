@@ -1,4 +1,4 @@
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 mod artwork;
 pub mod core;
 pub mod model;

@@ -1,9 +1,13 @@
+use std::collections::HashMap;
+
 use windows::{
     Media::Control::{
         GlobalSystemMediaTransportControlsSession as Session,
         GlobalSystemMediaTransportControlsSessionManager as SessionManager,
+        GlobalSystemMediaTransportControlsSessionMediaProperties as MediaProperties,
         GlobalSystemMediaTransportControlsSessionPlaybackStatus as PlaybackStatus,
     },
+    Storage::Streams::DataReader,
     core::Interface,
 };
 
@@ -12,9 +16,15 @@ use crate::{
     model::{Config, Status, Track},
 };
 
+struct ArtworkCache {
+    identity: String,
+    art_url: Option<String>,
+}
+
 pub struct WindowsSource {
     manager: SessionManager,
     config: Config,
+    artwork: HashMap<String, ArtworkCache>,
     last_error: Option<String>,
 }
 
@@ -24,11 +34,12 @@ impl WindowsSource {
         Ok(Self {
             manager,
             config: config.clone(),
+            artwork: HashMap::new(),
             last_error: None,
         })
     }
 
-    fn read_snapshot(&self) -> windows::core::Result<Option<Track>> {
+    fn read_snapshot(&mut self) -> windows::core::Result<Option<Track>> {
         let current = self.manager.GetCurrentSession().ok();
         let mut sessions = Vec::new();
         if let Some(current) = &current {
@@ -45,11 +56,12 @@ impl WindowsSource {
             }
             sessions.push(session);
         }
-        let candidates = sessions
-            .into_iter()
-            .enumerate()
-            .filter_map(|(order, session)| read_session(session, order).ok())
-            .collect();
+        let mut candidates = Vec::new();
+        for (order, session) in sessions.into_iter().enumerate() {
+            if let Ok(candidate) = read_session(session, order, &mut self.artwork) {
+                candidates.push(candidate);
+            }
+        }
         Ok(select_candidate(candidates, &self.config))
     }
 }
@@ -75,7 +87,11 @@ impl Source for WindowsSource {
     }
 }
 
-fn read_session(session: Session, stable_order: usize) -> windows::core::Result<Candidate> {
+fn read_session(
+    session: Session,
+    stable_order: usize,
+    artwork: &mut HashMap<String, ArtworkCache>,
+) -> windows::core::Result<Candidate> {
     let aumid = session.SourceAppUserModelId()?.to_string_lossy();
     let properties = session.TryGetMediaPropertiesAsync()?.join()?;
     let timeline = session.GetTimelineProperties()?;
@@ -91,20 +107,53 @@ fn read_session(session: Session, stable_order: usize) -> windows::core::Result<
         PlaybackStatus::Paused => Status::Paused,
         _ => Status::Stopped,
     };
-    Ok(candidate_from_data(
-        SessionData {
-            source: source_id(&aumid),
-            title: properties.Title()?.to_string_lossy(),
-            artist,
-            album: properties.AlbumTitle()?.to_string_lossy(),
-            status,
-            start: timeline.StartTime()?.Duration,
-            end: timeline.EndTime()?.Duration,
-            position: timeline.Position()?.Duration,
-        },
-        aumid,
-        stable_order,
-    ))
+    let data = SessionData {
+        source: source_id(&aumid),
+        title: properties.Title()?.to_string_lossy(),
+        artist,
+        album: properties.AlbumTitle()?.to_string_lossy(),
+        status,
+        start: timeline.StartTime()?.Duration,
+        end: timeline.EndTime()?.Duration,
+        position: timeline.Position()?.Duration,
+    };
+    let identity = format!(
+        "{}\0{}\0{}\0{}",
+        data.title, data.artist, data.album, data.source
+    );
+    let art_url = match artwork.get(&aumid) {
+        Some(cache) if cache.identity == identity => cache.art_url.clone(),
+        _ => {
+            let art_url = read_thumbnail(&properties).unwrap_or(None);
+            artwork.insert(
+                aumid.clone(),
+                ArtworkCache {
+                    identity,
+                    art_url: art_url.clone(),
+                },
+            );
+            art_url
+        }
+    };
+    let mut candidate = candidate_from_data(data, aumid, stable_order);
+    candidate.track.art_url = art_url;
+    Ok(candidate)
+}
+
+fn read_thumbnail(properties: &MediaProperties) -> windows::core::Result<Option<String>> {
+    let Ok(thumbnail) = properties.Thumbnail() else {
+        return Ok(None);
+    };
+    let stream = thumbnail.OpenReadAsync()?.join()?;
+    let size = stream.Size()?;
+    if size == 0 || size > crate::artwork::MAX_ART_BYTES as u64 {
+        return Ok(None);
+    }
+    let reader = DataReader::CreateDataReader(&stream)?;
+    let loaded = reader.LoadAsync(size as u32)?.join()?;
+    let mut bytes = vec![0; loaded as usize];
+    reader.ReadBytes(&mut bytes)?;
+    Ok(crate::artwork::data_uri(&bytes))
 }
 
 struct SessionData {
