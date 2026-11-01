@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Now Playing</title>
+    <link rel="stylesheet" href="./style.css">
+    <script src="/streams.js"></script>
+    <script src="./app.js" defer></script>
+    <link rel="stylesheet" href="./custom.css">
+  </head>
+  <body>
+    <main class="st-now-playing st-now-playing--stopped">
+      <img class="st-now-playing__art" alt="" hidden>
+      <section aria-live="polite">
+        <h1 class="st-now-playing__title"></h1>
+        <p class="st-now-playing__artist"></p>
+        <p class="st-now-playing__album"></p>
+        <p class="st-now-playing__source"></p>
+      </section>
+      <div class="st-now-playing__progress" aria-hidden="true">
+        <div class="st-now-playing__progress-bar"></div>
+      </div>
+      <span class="st-now-playing__time"></span>
+    </main>
+  </body>
+</html>
