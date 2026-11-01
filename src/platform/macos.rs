@@ -149,4 +149,13 @@ mod tests {
         assert!(parse_candidates("[]").unwrap().is_empty());
         assert!(parse_candidates("not json").is_err());
     }
+
+    #[test]
+    fn defaults_missing_fields_and_rejects_non_finite_time() {
+        let candidates = parse_candidates(r#"[{"source":"music"}]"#).unwrap();
+        assert_eq!(candidates[0].track.title, "");
+        assert_eq!(candidates[0].track.duration_ms, 0);
+        assert_eq!(milliseconds(f64::INFINITY), 0);
+        assert_eq!(milliseconds(f64::NAN), 0);
+    }
 }
