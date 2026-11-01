@@ -1,0 +1,15 @@
+name = "now-playing"
+version = "0.1.0"
+description = "Publishes the active system media session for an OBS overlay"
+
+[permissions]
+listens = []
+emits = ["now_playing"]
+
+[worker]
+command = ["bin/now-playing"]
+
+[config]
+poll_ms = 1000
+priority = ["spotify", "firefox", "chromium", "vlc", "music"]
+ignore = []
