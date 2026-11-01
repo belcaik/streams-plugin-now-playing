@@ -204,4 +204,26 @@ mod tests {
         assert_eq!(candidate.track.duration_ms, 0);
         assert_eq!(candidate.track.position_ms, 0);
     }
+
+    #[test]
+    fn converts_complete_session_dto() {
+        let candidate = candidate_from_data(
+            SessionData {
+                source: "firefox".into(),
+                title: "Song".into(),
+                artist: "Artist".into(),
+                album: "Album".into(),
+                status: Status::Paused,
+                start: 10_000,
+                end: 1_800_010_000,
+                position: 420_010_000,
+            },
+            "id".into(),
+            2,
+        );
+        assert_eq!(candidate.track.duration_ms, 180_000);
+        assert_eq!(candidate.track.position_ms, 42_000);
+        assert_eq!(candidate.track.source, "firefox");
+        assert_eq!(candidate.stable_order, 2);
+    }
 }
