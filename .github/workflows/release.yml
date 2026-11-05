@@ -21,10 +21,16 @@ jobs:
           - { runner: macos-15, target: aarch64-apple-darwin, executable: now-playing }
     steps:
       - uses: actions/checkout@v7
+      - name: Verificar versión del tag
+        shell: bash
+        run: |
+          version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' plugin.toml)
+          test -n "$version" || { echo "No se pudo leer version de plugin.toml"; exit 1; }
+          test "$GITHUB_REF_NAME" = "v$version" || { echo "El tag debe ser v$version"; exit 1; }
       - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: stable
-          target: ${{ matrix.target }}
+          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release --locked --target ${{ matrix.target }}
       - if: runner.os != 'Windows'
@@ -32,7 +38,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist/now-playing/{bin,overlay}
-          cp plugin.toml README.md dist/now-playing/
+          cp plugin.toml README.md LICENSE dist/now-playing/
           cp -R overlay/. dist/now-playing/overlay/
           cp "target/${{ matrix.target }}/release/now-playing" dist/now-playing/bin/
       - if: runner.os == 'Windows'
@@ -40,21 +46,21 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist/now-playing/bin, dist/now-playing/overlay | Out-Null
-          Copy-Item plugin.toml, README.md dist/now-playing/
+          Copy-Item plugin.toml, README.md, LICENSE dist/now-playing/
           Copy-Item overlay/* dist/now-playing/overlay/ -Recurse
           Copy-Item "target/${{ matrix.target }}/release/${{ matrix.executable }}" dist/now-playing/bin/
       - if: runner.os != 'Windows'
         name: Verificar contenido POSIX
         shell: bash
         run: |
-          for file in plugin.toml README.md overlay/index.html overlay/style.css overlay/app.js bin/now-playing; do
+          for file in plugin.toml README.md LICENSE overlay/index.html overlay/style.css overlay/app.js bin/now-playing; do
             test -f "dist/now-playing/$file" || { echo "Falta $file"; exit 1; }
           done
       - if: runner.os == 'Windows'
         name: Verificar contenido Windows
         shell: pwsh
         run: |
-          $files = 'plugin.toml', 'README.md', 'overlay/index.html', 'overlay/style.css', 'overlay/app.js', 'bin/now-playing.exe'
+          $files = 'plugin.toml', 'README.md', 'LICENSE', 'overlay/index.html', 'overlay/style.css', 'overlay/app.js', 'bin/now-playing.exe'
           foreach ($file in $files) {
             if (-not (Test-Path "dist/now-playing/$file" -PathType Leaf)) { throw "Falta $file" }
           }
@@ -66,7 +72,38 @@ jobs:
         name: Comprimir ZIP Windows
         shell: pwsh
         run: Compress-Archive -Path dist/now-playing -DestinationPath "dist/now-playing-${{ matrix.target }}.zip" -Force
+      - uses: actions/upload-artifact@v7
+        with:
+          name: now-playing-${{ matrix.target }}
+          path: dist/now-playing-${{ matrix.target }}.zip
+          if-no-files-found: error
+
+  publish:
+    needs: package
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Verificar assets y generar checksums
+        shell: bash
+        working-directory: dist
+        run: |
+          export LC_ALL=C
+          expected=$(printf '%s\n' \
+            now-playing-aarch64-apple-darwin.zip \
+            now-playing-aarch64-unknown-linux-gnu.zip \
+            now-playing-x86_64-apple-darwin.zip \
+            now-playing-x86_64-pc-windows-msvc.zip \
+            now-playing-x86_64-unknown-linux-gnu.zip)
+          actual=$(find . -maxdepth 1 -type f -name '*.zip' -printf '%f\n' | sort)
+          test "$actual" = "$expected" || { echo "Conjunto de assets inesperado"; diff <(printf '%s\n' "$expected") <(printf '%s\n' "$actual"); exit 1; }
+          sha256sum *.zip > SHA256SUMS
+          sha256sum -c SHA256SUMS
       - uses: softprops/action-gh-release@v3
         with:
-          files: dist/*.zip
+          files: |
+            dist/*.zip
+            dist/SHA256SUMS
           fail_on_unmatched_files: true
