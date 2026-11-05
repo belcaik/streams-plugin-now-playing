@@ -1,5 +1,5 @@
 name = "now-playing"
-version = "0.1.0"
+version = "0.1.1"
 description = "Publishes the active system media session for an OBS overlay"
 
 [permissions]
