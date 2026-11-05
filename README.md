@@ -8,20 +8,22 @@ Publica la sesión multimedia activa del sistema como eventos `now_playing` y mu
 - **Windows 10 1809+:** sesiones GSMTC, incluida la miniatura convertida a data URI.
 - **macOS:** Spotify y Music mediante JXA/Apple Events. Puede solicitar permiso de Automatización. No detecta navegadores; MediaRemote está restringido desde macOS 15.4 y no se usa.
 
-## Instalación desde una release
+## Instalación
 
-Descarga el ZIP de tu plataforma y descomprímelo de modo que quede `plugins/now-playing/plugin.toml`, con el ejecutable en `plugins/now-playing/bin/` y el overlay en `plugins/now-playing/overlay/`. Cada ZIP ya contiene la carpeta superior `now-playing/` lista para copiar a `plugins/`.
+Añade el repositorio a `config.toml` de streams-tools para instalar el plugin cuando falte:
 
-## Instalación como submódulo
+```toml
+[plugins]
+install = ["https://github.com/belcaik/streams-plugin-now-playing"]
+```
 
-Clona el repositorio en `plugins/now-playing` y ejecuta:
+También puedes instalarlo desde la línea de comandos:
 
 ```sh
-cd plugins/now-playing
-cargo build --release
-mkdir -p bin
-cp target/release/now-playing bin/       # en Windows: now-playing.exe
+streams-tools plugin add https://github.com/belcaik/streams-plugin-now-playing
 ```
+
+Ambos métodos descargan el ZIP apropiado para la plataforma y verifican su SHA-256. Para fijar la versión usa `https://github.com/belcaik/streams-plugin-now-playing@v0.1.0`.
 
 ## Fuente de navegador OBS
 
@@ -29,7 +31,7 @@ Añade un Browser Source con URL `http://127.0.0.1:7777/p/now-playing/`. El fond
 
 ## Configuración
 
-El host entrega `[config]` como objeto JSON al worker.
+No edites `plugin.toml`: una actualización reemplaza la carpeta del plugin. Declara sólo tus cambios en `[plugins.config.now-playing]` dentro de `config.toml` de streams-tools. El host hace deep merge sobre los defaults `[config]` del manifiesto; las tablas se mezclan recursivamente y los arrays se reemplazan completos.
 
 | Clave | Tipo | Default | Comportamiento |
 |---|---|---|---|
@@ -40,7 +42,7 @@ El host entrega `[config]` como objeto JSON al worker.
 Las listas se normalizan una vez a minúsculas ASCII y sin espacios externos. Primero gana `playing` sobre `paused`, después `priority`, el orden estable de descubrimiento y finalmente el id estable. Las fuentes no listadas van detrás de las listadas.
 
 ```toml
-[config]
+[plugins.config.now-playing]
 poll_ms = 2000
 priority = ["spotify", "firefox", "vlc"]
 ignore = ["chromium"]
