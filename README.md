@@ -23,7 +23,7 @@ También puedes instalarlo desde la línea de comandos:
 streams-tools plugin add https://github.com/belcaik/streams-plugin-now-playing
 ```
 
-Ambos métodos descargan el ZIP apropiado para la plataforma y verifican su SHA-256. Para fijar la versión usa `https://github.com/belcaik/streams-plugin-now-playing@v0.1.0`.
+Ambos métodos descargan el ZIP apropiado para la plataforma y verifican su SHA-256. Para fijar la versión usa `https://github.com/belcaik/streams-plugin-now-playing@v0.1.1`.
 
 ## Fuente de navegador OBS
 
